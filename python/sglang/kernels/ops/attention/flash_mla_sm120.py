@@ -247,6 +247,16 @@ def _flash_mla_sm120_prefill(
         if extra_indices is not None and extra_indices.dim() == 3
         else extra_indices
     )
+    # FlashInfer prefill supports extra footer pages of size 2 or 64.
+    # V4.1 ratio-2 caches use 128-token pages; preserve token addressing while
+    # repacking their data and scale footer into independent 64-token pages.
+    if extra_kv_u8 is not None and extra_kv_u8.shape[1] > _PBS_DST:
+        extra_kv_u8 = _split_kv_pages_to_64(
+            extra_kv_u8,
+            extra_kv_u8.shape[1],
+            touched_indices=extra_idx,
+            buffer_name="extra",
+        )
     output = q2.new_empty((num_tokens, num_heads, head_dim_v), dtype=torch.bfloat16)
     out_lse = torch.empty((num_tokens, num_heads), dtype=torch.float32, device=dev)
     _sparse_mla_sm120_paged_attention(
@@ -478,6 +488,8 @@ def _split_kv_pages_to_64(
     kv_u8: torch.Tensor,
     src_pbs: int,
     touched_indices: Optional[torch.Tensor] = None,
+    *,
+    buffer_name: str = "swa",
 ) -> torch.Tensor:
     """Split pbs=N footer-format pages into pbs=64 footer-format pages.
 
@@ -501,7 +513,7 @@ def _split_kv_pages_to_64(
     # Pre-allocated grow-only buffer for page-split output per device.
     dev = kv_u8.device
     buffers = get_resources().buffers
-    key = f"flash_mla_sm120_split:{dev}"
+    key = f"flash_mla_sm120_split:{dev}:{buffer_name}"
     buf = buffers.get(key)
     if buf is None or buf.shape[0] < num_dst_pages:
         # The first allocation can happen under inference mode (autotune), but
@@ -530,7 +542,7 @@ def _split_kv_pages_to_64(
     if use_mask:
         # Persistent per-device int8 mask, zeroed each call (cheap memset,
         # captured cleanly by CUDA graph). 1 = page is referenced this step.
-        mkey = f"flash_mla_sm120_mask:{dev}"
+        mkey = f"flash_mla_sm120_mask:{dev}:{buffer_name}"
         mbuf = buffers.get(mkey)
         if mbuf is None or mbuf.shape[0] < N:
             # The first allocation can happen under inference mode (autotune),
