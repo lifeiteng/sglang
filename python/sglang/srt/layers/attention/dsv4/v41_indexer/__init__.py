@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Tuple
 
 import torch
 
+from sglang.srt.utils import is_cuda
+
 from .full_topk import FullTopKIndexer
 from .types import (
     CandidateMetadata,
@@ -33,16 +35,17 @@ __all__ = [
     "PrefillInputs",
     "Selection",
     "has_dense_fp4_indexer",
-    "is_sm100_or_newer",
     "make_candidate_indexer",
     "make_full_topk_indexer",
+    "supports_deep_gemm_fp4_indexer",
 ]
 
 
 @functools.cache
-def is_sm100_or_newer() -> bool:
-    # DeepGEMM's fp8_fp4 mqa-logits kernels need SM100+; Hopper takes the torch indexer.
-    return torch.cuda.get_device_capability()[0] >= 10
+def supports_deep_gemm_fp4_indexer() -> bool:
+    # DeepGEMM's FP4 MQA logits require the SM100 family. SM120 has a
+    # higher compute capability but must use the existing torch indexer.
+    return is_cuda() and torch.cuda.get_device_capability()[0] == 10
 
 
 @functools.cache
@@ -63,7 +66,7 @@ def _use_deep_gemm_prefill() -> bool:
     from sglang.srt.runtime_context import get_parallel
 
     return (
-        is_sm100_or_newer()
+        supports_deep_gemm_fp4_indexer()
         and has_dense_fp4_indexer()
         and (
             get_parallel().attn_cp_size > 1
@@ -81,7 +84,7 @@ def make_full_topk_indexer(
         token_to_kv_pool=token_to_kv_pool,
         req_to_token=req_to_token,
         use_deep_gemm_prefill=_use_deep_gemm_prefill(),
-        use_deep_gemm_decode=is_sm100_or_newer(),
+        use_deep_gemm_decode=supports_deep_gemm_fp4_indexer(),
     )
 
 
@@ -106,7 +109,7 @@ def make_candidate_indexer(
         use_deep_gemm_prefill=use_deep_gemm_prefill,
     )
     # Without candidate blocks no layer is a candidate source or consumer.
-    if not is_sm100_or_newer() or candidate_topk_blocks <= 0:
+    if not supports_deep_gemm_fp4_indexer() or candidate_topk_blocks <= 0:
         return dense_blocks, dense_blocks
 
     from sglang.srt.layers.deep_gemm_wrapper.configurer import (

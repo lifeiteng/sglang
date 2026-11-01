@@ -84,7 +84,7 @@ from sglang.srt.layers.attention.dsv4.v41_indexer import (
     PrefillInputs,
     Selection,
     has_dense_fp4_indexer,
-    is_sm100_or_newer,
+    supports_deep_gemm_fp4_indexer,
     make_candidate_indexer,
     make_full_topk_indexer,
 )
@@ -1499,7 +1499,7 @@ class DeepseekV4AttnBackend(
 
     @property
     def low_ratio_prefill_graph(self) -> bool:
-        return bool(self.low_ratios) and has_dense_fp4_indexer() and is_sm100_or_newer()
+        return bool(self.low_ratios) and has_dense_fp4_indexer() and supports_deep_gemm_fp4_indexer()
 
     def can_run_prefill_cuda_graph(self, forward_batch: ForwardBatch) -> bool:
         max_seq_len = _prefill_graph_max_seq_len()
@@ -2839,7 +2839,7 @@ class DeepseekV4AttnBackend(
                 slots,
                 pos,
                 fuse_index_store=(
-                    x.is_cuda and torch.version.cuda is not None and is_sm100_or_newer()
+                    x.is_cuda and torch.version.cuda is not None and supports_deep_gemm_fp4_indexer()
                 ),
             )
             return
@@ -2869,7 +2869,7 @@ class DeepseekV4AttnBackend(
             pooled,
             slots,
             group_pos,
-            fuse_index_store=is_sm100_or_newer(),
+            fuse_index_store=supports_deep_gemm_fp4_indexer(),
         )
 
     def _low_ratio_compress_fused(self, layer, x, req, pos, *, draft_len=1) -> None:
