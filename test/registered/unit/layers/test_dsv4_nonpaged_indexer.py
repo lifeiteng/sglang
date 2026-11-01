@@ -1155,6 +1155,52 @@ class TestGroupedVerifyRows(CustomTestCase):
 
 
 class TestCandidateIndexerGating(CustomTestCase):
+    def test_fp4_indexer_device_capability(self):
+        from sglang.srt.layers.attention.dsv4 import v41_indexer
+
+        check = v41_indexer.supports_deep_gemm_fp4_indexer
+        self.addCleanup(check.cache_clear)
+        for capability, expected in (
+            ((9, 0), False),
+            ((10, 0), True),
+            ((10, 3), True),
+            ((12, 0), False),
+            ((12, 1), False),
+        ):
+            with (
+                self.subTest(capability=capability),
+                patch.object(v41_indexer, "is_cuda", return_value=True),
+                patch("torch.cuda.get_device_capability", return_value=capability),
+            ):
+                check.cache_clear()
+                self.assertEqual(check(), expected)
+                if not expected:
+                    v41_indexer._use_deep_gemm_prefill.cache_clear()
+                    self.addCleanup(v41_indexer._use_deep_gemm_prefill.cache_clear)
+                    full = v41_indexer.make_full_topk_indexer(
+                        token_to_kv_pool=None, req_to_token=None
+                    )
+                    self.assertFalse(full.use_deep_gemm_prefill)
+                    self.assertFalse(full.use_deep_gemm_decode)
+                    prefill, decode = v41_indexer.make_candidate_indexer(
+                        token_to_kv_pool=None,
+                        req_to_token=None,
+                        page_size=256,
+                        candidate_topk_blocks=128,
+                        candidate_block_size=128,
+                    )
+                    self.assertIs(prefill, decode)
+                    self.assertFalse(prefill.use_deep_gemm_prefill)
+        with (
+            patch.object(v41_indexer, "is_cuda", return_value=False),
+            patch(
+                "torch.cuda.get_device_capability",
+                side_effect=AssertionError("non-CUDA"),
+            ),
+        ):
+            check.cache_clear()
+            self.assertFalse(check())
+
     def test_candidate_indexer_gating(self):
         from sglang.srt.layers.attention.dsv4 import v41_indexer
         from sglang.srt.layers.attention.dsv4.v41_indexer.dense_blocks import (
@@ -1162,7 +1208,9 @@ class TestCandidateIndexerGating(CustomTestCase):
         )
 
         def sm100(value):
-            return patch.object(v41_indexer, "is_sm100_or_newer", lambda: value)
+            return patch.object(
+                v41_indexer, "supports_deep_gemm_fp4_indexer", lambda: value
+            )
 
         def make(topk_blocks, block_size):
             # The prefill choice reads the real DeepGEMM build and is cached.

@@ -85,9 +85,9 @@ from sglang.srt.layers.attention.dsv4.v41_indexer import (
     CapturedPrefillInputs,
     DecodeInputs,
     PrefillInputs,
-    is_sm100_or_newer,
     make_candidate_indexer,
     make_full_topk_indexer,
+    supports_deep_gemm_fp4_indexer,
 )
 from sglang.srt.layers.attention.dsv4.v41_indexer.scoring import prefill_k_slots
 from sglang.srt.layers.attention.dsv4.v41_indexer.sparse_table import (
@@ -3622,7 +3622,9 @@ class DeepseekV4AttnBackend(
                 slots,
                 pos,
                 fuse_index_store=(
-                    x.is_cuda and torch.version.cuda is not None and is_sm100_or_newer()
+                    x.is_cuda
+                    and torch.version.cuda is not None
+                    and supports_deep_gemm_fp4_indexer()
                 ),
             )
             return
@@ -3652,7 +3654,7 @@ class DeepseekV4AttnBackend(
             pooled,
             slots,
             group_pos,
-            fuse_index_store=is_sm100_or_newer(),
+            fuse_index_store=supports_deep_gemm_fp4_indexer(),
         )
 
     def _low_ratio_compress_fused(
